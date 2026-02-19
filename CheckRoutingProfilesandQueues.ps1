@@ -1,16 +1,34 @@
-﻿# ==============================
+# ==============================
 # CONFIGURATION
 # ==============================
 
 $InstanceId = "YOUR_CONNECT_INSTANCE_ID"
-$TargetQueueName = "YOUR_QUEUE_NAME"
+$QueueIdFile = "queueIds.txt"
 $OutputFile = "RoutingProfileQueueAudit.csv"
 
 # ==============================
-# FUNCTION: GET ALL QUEUES (Pagination Safe)
+# LOAD TARGET QUEUE IDS FROM FILE
 # ==============================
 
-Write-Host "Retrieving all queues..."
+if (-not (Test-Path $QueueIdFile)) {
+    Write-Host "Queue ID file not found: $QueueIdFile" -ForegroundColor Red
+    return
+}
+
+$TargetQueueIds = Get-Content $QueueIdFile | Where-Object { $_.Trim() -ne "" }
+
+if (-not $TargetQueueIds) {
+    Write-Host "Queue ID file is empty." -ForegroundColor Red
+    return
+}
+
+Write-Host "Loaded $($TargetQueueIds.Count) Queue IDs from file."
+
+# ==============================
+# OPTIONAL: GET ALL QUEUES (To Map ID -> Name)
+# ==============================
+
+Write-Host "Retrieving all queues for name mapping..."
 
 $AllQueues = @()
 $NextToken = $null
@@ -32,24 +50,14 @@ do {
 
 } while ($NextToken)
 
-if (-not $AllQueues) {
-    Write-Host "No queues found." -ForegroundColor Red
-    return
+# Create lookup table for QueueId -> QueueName
+$QueueLookup = @{}
+foreach ($Queue in $AllQueues) {
+    $QueueLookup[$Queue.Id] = $Queue.Name
 }
-
-# Find target queue
-$TargetQueue = $AllQueues | Where-Object { $_.Name -eq $TargetQueueName }
-
-if (-not $TargetQueue) {
-    Write-Host "Queue '$TargetQueueName' not found." -ForegroundColor Red
-    return
-}
-
-$TargetQueueId = $TargetQueue.Id
-Write-Host "Target Queue Found: $TargetQueueName ($TargetQueueId)" -ForegroundColor Green
 
 # ==============================
-# FUNCTION: GET ALL ROUTING PROFILES (Pagination Safe)
+# GET ALL ROUTING PROFILES (Pagination Safe)
 # ==============================
 
 Write-Host "Retrieving all routing profiles..."
@@ -94,16 +102,26 @@ foreach ($Profile in $AllRoutingProfiles) {
         --routing-profile-id $Profile.Id `
         --output json | ConvertFrom-Json
 
-    $AssociatedQueues = $ProfileDetails.RoutingProfile.QueueConfigs
+    $AssociatedQueueIds = $ProfileDetails.RoutingProfile.QueueConfigs |
+        ForEach-Object { $_.QueueReference.QueueId }
 
-    $Match = $AssociatedQueues | Where-Object { $_.QueueReference.QueueId -eq $TargetQueueId }
+    foreach ($QueueId in $TargetQueueIds) {
 
-    $Results += [PSCustomObject]@{
-        RoutingProfileName = $Profile.Name
-        RoutingProfileId   = $Profile.Id
-        QueueName          = $TargetQueueName
-        QueueId            = $TargetQueueId
-        IsAssociated       = if ($Match) { $true } else { $false }
+        $IsMatch = $AssociatedQueueIds -contains $QueueId
+
+        $QueueName = if ($QueueLookup.ContainsKey($QueueId)) {
+            $QueueLookup[$QueueId]
+        } else {
+            "Unknown Queue"
+        }
+
+        $Results += [PSCustomObject]@{
+            RoutingProfileName = $Profile.Name
+            RoutingProfileId   = $Profile.Id
+            QueueId            = $QueueId
+            QueueName          = $QueueName
+            IsAssociated       = $IsMatch
+        }
     }
 }
 
