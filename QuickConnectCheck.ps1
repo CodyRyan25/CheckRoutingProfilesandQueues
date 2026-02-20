@@ -70,7 +70,7 @@ foreach ($quickConnectId in $quickConnectList) {
 
     $qc = $qcJson | ConvertFrom-Json
 
-    # Only Queue-type QuickConnects have QueueId
+    # Only Queue-type QuickConnects contain QueueId
     if ($qc.QuickConnect.QuickConnectConfig.QueueConfig.QueueId) {
 
         $queueId = $qc.QuickConnect.QuickConnectConfig.QueueConfig.QueueId
@@ -81,6 +81,7 @@ foreach ($quickConnectId in $quickConnectList) {
                 QueueName        = $queueLookup[$queueId]
                 QueueId          = $queueId
                 QuickConnectName = $qc.QuickConnect.Name
+                QuickConnectId   = $quickConnectId
             }
 
         }
