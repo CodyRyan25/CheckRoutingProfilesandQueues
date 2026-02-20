@@ -1,4 +1,4 @@
-﻿# ===============================
+# ===============================
 # CONFIGURATION
 # ===============================
 
@@ -68,6 +68,7 @@ foreach ($routingProfileId in $routingProfilesList) {
                 RoutingProfileId = $routingProfileId
                 QueueName        = $queue.QueueName
                 QueueId          = $queue.QueueId
+                ChannelType      = $queue.Channel
             }
 
         }
