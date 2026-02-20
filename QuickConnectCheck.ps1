@@ -1,125 +1,97 @@
-﻿# ==============================
+# ===============================
 # CONFIGURATION
-# ==============================
+# ===============================
 
-$InstanceId = "YOUR_CONNECT_INSTANCE_ID"
-$QueueIdFile = "queueIds.txt"
-$OutputFile = "QueueQuickConnectAudit.csv"
+# Your Amazon Connect Instance ID
+$InstanceId = "YOUR_INSTANCE_ID"
 
-# ==============================
-# LOAD QUEUE IDS
-# ==============================
+# Files
+$queueFilterFile = "./filteredQueueList.txt"
+$outputCsv       = "./QueueQuickConnects.csv"
 
-if (-not (Test-Path $QueueIdFile)) {
-    Write-Host "Queue ID file not found: $QueueIdFile" -ForegroundColor Red
-    return
+# ===============================
+# VALIDATE INPUT FILE
+# ===============================
+
+if (!(Test-Path $queueFilterFile)) {
+    Write-Host "ERROR: filteredQueueList.txt not found!"
+    exit
 }
 
-$QueueIds = Get-Content $QueueIdFile | Where-Object { $_.Trim() -ne "" }
+$queueIds = Get-Content $queueFilterFile
 
-if (-not $QueueIds) {
-    Write-Host "Queue ID file is empty." -ForegroundColor Red
-    return
+Write-Host "Loaded $($queueIds.Count) queues..."
+
+# ===============================
+# GET QUEUE NAMES
+# ===============================
+
+$queueLookup = @{}
+
+foreach ($queueId in $queueIds) {
+
+    $queueJson = aws connect describe-queue `
+        --instance-id $InstanceId `
+        --queue-id $queueId `
+        --output json
+
+    $queue = $queueJson | ConvertFrom-Json
+
+    $queueLookup[$queueId] = $queue.Queue.Name
 }
 
-Write-Host "Loaded $($QueueIds.Count) Queue IDs from file."
+# ===============================
+# GET QUICK CONNECTS
+# ===============================
 
-# ==============================
-# GET ALL QUEUES (FOR NAME LOOKUP)
-# ==============================
+Write-Host "Retrieving quick connects..."
 
-Write-Host "Retrieving all queues for name mapping..."
+$quickConnectIds = aws connect list-quick-connects `
+    --instance-id $InstanceId `
+    --query "QuickConnectSummaryList[].Id" `
+    --output text
 
-$AllQueues = @()
-$NextToken = $null
+$quickConnectList = $quickConnectIds -split "`t"
 
-do {
-    $Command = @(
-        "connect", "list-queues",
-        "--instance-id", $InstanceId,
-        "--output", "json"
-    )
+# ===============================
+# MATCH QUICK CONNECTS TO QUEUES
+# ===============================
 
-    if ($NextToken) {
-        $Command += @("--next-token", $NextToken)
-    }
+$results = @()
 
-    $Response = aws @Command | ConvertFrom-Json
-    $AllQueues += $Response.QueueSummaryList
-    $NextToken = $Response.NextToken
+foreach ($quickConnectId in $quickConnectList) {
 
-} while ($NextToken)
+    Write-Host "Checking QuickConnect: $quickConnectId"
 
-$QueueLookup = @{}
-foreach ($Queue in $AllQueues) {
-    $QueueLookup[$Queue.Id] = $Queue.Name
-}
+    $qcJson = aws connect describe-quick-connect `
+        --instance-id $InstanceId `
+        --quick-connect-id $quickConnectId `
+        --output json
 
-# ==============================
-# PROCESS EACH QUEUE
-# ==============================
+    $qc = $qcJson | ConvertFrom-Json
 
-$Results = @()
+    # Only Queue-type QuickConnects have QueueId
+    if ($qc.QuickConnect.QuickConnectConfig.QueueConfig.QueueId) {
 
-foreach ($QueueId in $QueueIds) {
+        $queueId = $qc.QuickConnect.QuickConnectConfig.QueueConfig.QueueId
 
-    Write-Host "Processing Queue: $QueueId"
+        if ($queueIds -contains $queueId) {
 
-    $QueueName = if ($QueueLookup.ContainsKey($QueueId)) {
-        $QueueLookup[$QueueId]
-    } else {
-        "Unknown Queue"
-    }
-
-    # Pagination-safe quick connect listing
-    $NextToken = $null
-    do {
-
-        $Command = @(
-            "connect", "list-queue-quick-connects",
-            "--instance-id", $InstanceId,
-            "--queue-id", $QueueId,
-            "--output", "json"
-        )
-
-        if ($NextToken) {
-            $Command += @("--next-token", $NextToken)
-        }
-
-        $Response = aws @Command | ConvertFrom-Json
-        $QuickConnects = $Response.QuickConnectSummaryList
-        $NextToken = $Response.NextToken
-
-        foreach ($QC in $QuickConnects) {
-
-            # Get full quick connect details
-            $QCDetails = aws connect describe-quick-connect `
-                --instance-id $InstanceId `
-                --quick-connect-id $QC.Id `
-                --output json | ConvertFrom-Json
-
-            $Config = $QCDetails.QuickConnect.QuickConnectConfig
-
-            $Results += [PSCustomObject]@{
-                QueueId            = $QueueId
-                QueueName          = $QueueName
-                QuickConnectId     = $QC.Id
-                QuickConnectName   = $QC.Name
-                QuickConnectType   = $Config.QuickConnectType
-                ContactFlowId      = $Config.ContactFlowId
-                DestinationQueueId = $Config.QueueConfig.QueueId
-                DestinationUserId  = $Config.UserConfig.UserId
+            $results += [PSCustomObject]@{
+                QueueName        = $queueLookup[$queueId]
+                QueueId          = $queueId
+                QuickConnectName = $qc.QuickConnect.Name
             }
-        }
 
-    } while ($NextToken)
+        }
+    }
 }
 
-# ==============================
-# EXPORT RESULTS
-# ==============================
+# ===============================
+# EXPORT CSV
+# ===============================
 
-$Results | Export-Csv -Path $OutputFile -NoTypeInformation
+$results | Export-Csv -Path $outputCsv -NoTypeInformation
 
 Write-Host "Completed."
-Write-Host "Results exported to $OutputFile" -ForegroundColor Cyan
+Write-Host "Results saved to $outputCsv"
