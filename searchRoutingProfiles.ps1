@@ -16,7 +16,7 @@ Write-Host "Running search-routing-profiles..."
 
 aws connect search-routing-profiles `
     --instance-id $instanceId `
-    --max-results 1000 `
+    --max-results 500 `
     --query "RoutingProfiles" `
     --output json | Out-File $unfilteredFile
 
